@@ -7,10 +7,13 @@ import discord
 from discord import app_commands
 from dotenv import load_dotenv
 from activity import ActivityTracker
+from away import AwayFeature, register as register_away
 
 
 class OwnerCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction):
+        if interaction.command and interaction.command.name == '외활요청' and interaction.guild is not None:
+            return True
         if interaction.user.id == self.client.owner_id:
             return True
         await interaction.response.send_message("도화 소유자만 사용할 수 있습니다.", ephemeral=True)
@@ -20,6 +23,7 @@ class OwnerCommandTree(app_commands.CommandTree):
 class DohwaBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
+        self.away = None
         self.activity = None
         self.owner_id = None
         self.syncing_guilds = set()
@@ -29,6 +33,7 @@ class DohwaBot(discord.Client):
         self.activity = ActivityTracker(self)
         info = await self.application_info()
         self.owner_id = info.team.owner_id if info.team else info.owner.id
+        self.away = AwayFeature(self)
         await self.tree.sync()
 
     async def on_voice_state_update(self, member, before, after):
@@ -48,6 +53,9 @@ class DohwaBot(discord.Client):
             await self.activity.ready()
 
     async def close(self):
+        if self.away:
+            self.away.close()
+            self.away = None
         if self.activity:
             self.activity.close()
             self.activity = None
@@ -55,6 +63,7 @@ class DohwaBot(discord.Client):
 
     async def on_ready(self):
         await self.activity.ready()
+        self.away.start()
         logging.getLogger("dohwa").info("도화 로그인 완료: %s (%s)", self.user, self.user.id)
 
 
@@ -141,6 +150,9 @@ async def sync_permissions(interaction: discord.Interaction):
         bot.syncing_guilds.discard(guild.id)
 
 
+register_away(bot)
+
+
 def main():
     load_dotenv(Path(__file__).resolve().with_name(".env"))
     token = os.getenv("DISCORD_TOKEN", "").strip()
@@ -154,3 +166,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
