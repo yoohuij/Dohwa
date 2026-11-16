@@ -6,6 +6,7 @@ from pathlib import Path
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
+from activity import ActivityTracker
 
 
 class OwnerCommandTree(app_commands.CommandTree):
@@ -19,16 +20,41 @@ class OwnerCommandTree(app_commands.CommandTree):
 class DohwaBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
+        self.activity = None
         self.owner_id = None
         self.syncing_guilds = set()
         self.tree = OwnerCommandTree(self)
 
     async def setup_hook(self):
+        self.activity = ActivityTracker(self)
         info = await self.application_info()
         self.owner_id = info.team.owner_id if info.team else info.owner.id
         await self.tree.sync()
 
+    async def on_voice_state_update(self, member, before, after):
+        if self.activity:
+            self.activity.reconcile()
+
+    async def on_message(self, message):
+        if self.activity:
+            self.activity.message(message)
+
+    async def on_disconnect(self):
+        if self.activity:
+            self.activity.disconnect()
+
+    async def on_resumed(self):
+        if self.activity:
+            await self.activity.ready()
+
+    async def close(self):
+        if self.activity:
+            self.activity.close()
+            self.activity = None
+        await super().close()
+
     async def on_ready(self):
+        await self.activity.ready()
         logging.getLogger("dohwa").info("도화 로그인 완료: %s (%s)", self.user, self.user.id)
 
 
