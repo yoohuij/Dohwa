@@ -8,11 +8,12 @@ from discord import app_commands
 from dotenv import load_dotenv
 from activity import ActivityTracker
 from away import AwayFeature, register as register_away
+from profile_card import register as register_profile
 
 
 class OwnerCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction):
-        if interaction.command and interaction.command.name == '외활요청' and interaction.guild is not None:
+        if interaction.command and interaction.command.qualified_name in ('외활요청', '정보') and interaction.guild is not None:
             return True
         if interaction.user.id == self.client.owner_id:
             return True
@@ -151,6 +152,7 @@ async def sync_permissions(interaction: discord.Interaction):
 
 
 register_away(bot)
+register_profile(bot)
 
 
 def main():
