@@ -1,7 +1,11 @@
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
 from activity import ActivityClock, ActivityStore
+from bot import DohwaBot
 
 
 class ActivityTests(unittest.TestCase):
@@ -70,6 +74,23 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(self.store.total(1,2),100)
         self.assertEqual(self.store.total(1,3),0)
         self.assertEqual(self.store.total(2,2),0)
+
+
+class BotSetupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_setup_uses_tracker_without_changing_discord_presence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Path(directory) / 'activity.sqlite3'
+            application = SimpleNamespace(team=None, owner=SimpleNamespace(id=42))
+            async with DohwaBot() as bot:
+                with (
+                    patch.dict('os.environ', {'ACTIVITY_DATABASE_PATH': str(database)}),
+                    patch.object(bot, 'application_info', return_value=application),
+                    patch.object(bot.tree, 'sync') as sync,
+                ):
+                    await bot.setup_hook()
+                self.assertIsNone(bot.activity)
+                self.assertIs(bot.away.store.db, bot.activity_tracker.store.db)
+                sync.assert_awaited_once_with()
 
 
 if __name__ == '__main__':

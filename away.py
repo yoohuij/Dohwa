@@ -150,7 +150,7 @@ class RecallView(discord.ui.View):
 class AwayFeature:
     def __init__(self, bot):
         self.bot = bot
-        self.store = AwayStore(bot.activity.store.db)
+        self.store = AwayStore(bot.activity_tracker.store.db)
         self.lock = asyncio.Lock()
         bot.add_view(ReviewView(self))
         bot.add_view(RecallView(self))
@@ -172,7 +172,7 @@ class AwayFeature:
     async def request(self, interaction, hours):
         await interaction.response.defer(ephemeral=True)
         async with self.lock:
-            self.bot.activity.reconcile()
+            self.bot.activity_tracker.reconcile()
             try:
                 row = self.store.request(interaction.id,interaction.guild_id,interaction.user.id,hours)
             except ValueError as error:
@@ -196,7 +196,7 @@ class AwayFeature:
             try:
                 if not rows:
                     raise ValueError('요청을 찾을 수 없습니다.')
-                self.bot.activity.reconcile()
+                self.bot.activity_tracker.reconcile()
                 row = self.store.decide(rows[0]['id'],interaction.user.id,approve,time.time())
             except ValueError as error:
                 await interaction.followup.send(str(error),ephemeral=True)
