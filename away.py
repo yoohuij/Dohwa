@@ -19,6 +19,9 @@ class AwayStore:
             db.executescript('''
                 CREATE TABLE IF NOT EXISTS away_settings (
                     guild_id INTEGER PRIMARY KEY, channel_id INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS away_hour_adjustments (
+                    guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, hours INTEGER NOT NULL,
+                    PRIMARY KEY(guild_id,user_id));
                 CREATE TABLE IF NOT EXISTS away_requests (
                     id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL, hours INTEGER NOT NULL CHECK(hours>0),
@@ -58,12 +61,37 @@ class AwayStore:
             self.db.execute('INSERT OR REPLACE INTO away_settings VALUES (?,?)',(guild_id,channel_id))
 
     def available(self, guild_id, user_id):
+        balance, seconds = self._balance(guild_id, user_id)
+        return max(0, balance), seconds
+
+    def _balance(self, guild_id, user_id):
         row = self.db.execute('SELECT active_seconds FROM activity_totals WHERE guild_id=? AND user_id=?',
                               (guild_id,user_id)).fetchone()
         seconds = row[0] if row else 0
         used = self.db.execute("SELECT COALESCE(SUM(hours),0) FROM away_requests WHERE guild_id=? AND user_id=? AND status IN ('active','ended')",
                                (guild_id,user_id)).fetchone()[0]
-        return max(0, int(seconds // 18000) - used), seconds
+        adjustment = self.db.execute(
+            'SELECT hours FROM away_hour_adjustments WHERE guild_id=? AND user_id=?',
+            (guild_id, user_id),
+        ).fetchone()
+        return int(seconds // 18000) - used + (adjustment[0] if adjustment else 0), seconds
+
+    def adjust_hours(self, guild_id, user_id, hours):
+        if not hours:
+            raise ValueError('0시간은 조정할 수 없습니다.')
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            balance, _ = self._balance(guild_id, user_id)
+            available = max(0, balance) + hours
+            if available < 0:
+                raise ValueError('현재 외활 가능 시간을 초과하여 감소시킬 수 없습니다.')
+            # Apply the requested change to the visible balance, even after an activity correction.
+            self.db.execute(
+                '''INSERT INTO away_hour_adjustments (guild_id, user_id, hours) VALUES (?, ?, ?)
+                   ON CONFLICT(guild_id,user_id) DO UPDATE SET hours=hours+excluded.hours''',
+                (guild_id, user_id, available - balance),
+            )
+        return available
 
     def request(self, request_id, guild_id, user_id, hours):
         if not isinstance(hours,int) or not 1 <= hours <= 8760:

@@ -36,6 +36,27 @@ class AwayTests(unittest.TestCase):
             self.store.request(2,1,2,4)
         self.assertEqual(self.store.rows('SELECT * FROM away_requests'),[])
 
+    def test_adjusted_hours_are_spendable_and_saved(self):
+        self.assertEqual(self.store.adjust_hours(1, 2, 2), 5)
+        self.store.request(1, 1, 2, 4)
+        self.store.decide(1, 5, True, 1000)
+        self.assertEqual(self.store.adjust_hours(1, 2, -1), 0)
+        with self.assertRaises(ValueError):
+            self.store.adjust_hours(1, 2, -1)
+        with self.assertRaises(ValueError):
+            self.store.adjust_hours(1, 2, 0)
+        self.assertEqual(AwayStore(self.db).available(1, 2), (0, 54000))
+        self.assertEqual(self.store.available(2, 2), (0, 0))
+
+    def test_positive_adjustment_adds_to_visible_balance_after_activity_correction(self):
+        self.store.request(1, 1, 2, 3)
+        self.store.decide(1, 5, True, 1000)
+        with self.db:
+            self.db.execute('UPDATE activity_totals SET active_seconds=0')
+        self.assertEqual(self.store.adjust_hours(1, 2, 2), 2)
+        self.assertEqual(self.store.available(1, 2), (2, 0))
+        self.assertEqual(self.store.get(1)['status'], 'active')
+
     def test_approval_spends_once(self):
         self.store.request(10,1,2,2)
         self.assertEqual(self.store.available(1,2)[0],3)

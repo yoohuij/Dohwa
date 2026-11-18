@@ -96,6 +96,42 @@ async def ping(interaction: discord.Interaction):
     )
 
 
+@bot.tree.command(name="외활시간추가감소", description="서버장·도화 소유자: 유저의 외활 가능 시간을 조정합니다.")
+@app_commands.guild_only()
+@app_commands.describe(시간="양수는 추가, 음수는 감소. 단위는 시간입니다.")
+async def adjust_away_time(interaction: discord.Interaction, 유저: discord.Member, 시간: int):
+    await interaction.response.defer(ephemeral=True)
+    bot.activity_tracker.reconcile()
+    try:
+        available = bot.away.store.adjust_hours(interaction.guild_id, 유저.id, 시간)
+    except ValueError as error:
+        await interaction.followup.send(str(error), ephemeral=True)
+        return
+    await interaction.followup.send(
+        f"{유저.mention} 외활 가능 시간 {시간:+d}시간. 현재 {available}시간.",
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.tree.command(name="활동시간추가감소", description="서버장·도화 소유자: 유저의 활동시간을 조정합니다.")
+@app_commands.guild_only()
+@app_commands.describe(시간="양수는 추가, 음수는 감소. 단위는 시간입니다.")
+async def adjust_activity_time(interaction: discord.Interaction, 유저: discord.Member, 시간: int):
+    await interaction.response.defer(ephemeral=True)
+    bot.activity_tracker.reconcile()
+    try:
+        seconds = bot.activity_tracker.store.adjust_hours(interaction.guild_id, 유저.id, 시간)
+    except ValueError as error:
+        await interaction.followup.send(str(error), ephemeral=True)
+        return
+    hours, minutes = divmod(int(seconds) // 60, 60)
+    available, _ = bot.away.store.available(interaction.guild_id, 유저.id)
+    await interaction.followup.send(
+        f"{유저.mention} 활동시간 {시간:+d}시간. 현재 {hours}시간 {minutes}분, 외활 가능 {available}시간.",
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 @bot.tree.command(name="권한동기화", description="모든 방의 개별 권한을 부모 카테고리 권한으로 덮어씁니다.")
 @app_commands.guild_only()
