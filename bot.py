@@ -25,45 +25,45 @@ class DohwaBot(discord.Client):
     def __init__(self):
         super().__init__(intents=discord.Intents.default())
         self.away = None
-        self.activity = None
+        self.activity_tracker = None
         self.owner_id = None
         self.syncing_guilds = set()
         self.tree = OwnerCommandTree(self)
 
     async def setup_hook(self):
-        self.activity = ActivityTracker(self)
+        self.activity_tracker = ActivityTracker(self)
         info = await self.application_info()
         self.owner_id = info.team.owner_id if info.team else info.owner.id
         self.away = AwayFeature(self)
         await self.tree.sync()
 
     async def on_voice_state_update(self, member, before, after):
-        if self.activity:
-            self.activity.reconcile()
+        if self.activity_tracker:
+            self.activity_tracker.reconcile()
 
     async def on_message(self, message):
-        if self.activity:
-            self.activity.message(message)
+        if self.activity_tracker:
+            self.activity_tracker.message(message)
 
     async def on_disconnect(self):
-        if self.activity:
-            self.activity.disconnect()
+        if self.activity_tracker:
+            self.activity_tracker.disconnect()
 
     async def on_resumed(self):
-        if self.activity:
-            await self.activity.ready()
+        if self.activity_tracker:
+            await self.activity_tracker.ready()
 
     async def close(self):
         if self.away:
             self.away.close()
             self.away = None
-        if self.activity:
-            self.activity.close()
-            self.activity = None
+        if self.activity_tracker:
+            self.activity_tracker.close()
+            self.activity_tracker = None
         await super().close()
 
     async def on_ready(self):
-        await self.activity.ready()
+        await self.activity_tracker.ready()
         self.away.start()
         logging.getLogger("dohwa").info("도화 로그인 완료: %s (%s)", self.user, self.user.id)
 

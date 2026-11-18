@@ -125,7 +125,7 @@ def target_for(interaction, selected):
 
 def register(bot):
     def store():
-        return ProfileStore(bot.activity.store.db)
+        return ProfileStore(bot.activity_tracker.store.db)
 
     render_lock = asyncio.Semaphore(2)
 
@@ -138,7 +138,7 @@ def register(bot):
         target = target_for(interaction,유저)
         try:
             member = await interaction.guild.fetch_member(target.id)
-            bot.activity.reconcile()
+            bot.activity_tracker.reconcile()
             db = store()
             category = db.category(interaction.guild_id,member.roles)
             available, seconds = bot.away.store.available(interaction.guild_id,member.id)
