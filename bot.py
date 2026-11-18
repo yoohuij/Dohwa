@@ -8,16 +8,24 @@ from discord import app_commands
 from dotenv import load_dotenv
 from activity import ActivityTracker
 from away import AwayFeature, register as register_away
-from profile_card import register as register_profile
+from profile_card import ProfileStore, register as register_profile
 
 
-class OwnerCommandTree(app_commands.CommandTree):
+class DohwaCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction):
-        if interaction.command and interaction.command.qualified_name in ('외활요청', '정보') and interaction.guild is not None:
+        bot = self.client
+        command = interaction.command.qualified_name if interaction.command else None
+        if command in ('외활요청', '정보') and interaction.guild_id is not None:
             return True
-        if interaction.user.id == self.client.owner_id:
+        if interaction.user.id == bot.owner_id or bot.has_role_category(interaction, '서버장'):
             return True
-        await interaction.response.send_message("도화 소유자만 사용할 수 있습니다.", ephemeral=True)
+        if command in ('외활권 부여', '외활권 회수'):
+            if bot.has_role_category(interaction, '총관리자'):
+                return True
+            message = "서버장, 총관리자 또는 도화 소유자만 사용할 수 있습니다."
+        else:
+            message = "서버장 또는 도화 소유자만 사용할 수 있습니다."
+        await interaction.response.send_message(message, ephemeral=True)
         return False
 
 
@@ -26,16 +34,24 @@ class DohwaBot(discord.Client):
         super().__init__(intents=discord.Intents.default())
         self.away = None
         self.activity_tracker = None
+        self.profile_store = None
         self.owner_id = None
         self.syncing_guilds = set()
-        self.tree = OwnerCommandTree(self)
+        self.tree = DohwaCommandTree(self)
 
     async def setup_hook(self):
         self.activity_tracker = ActivityTracker(self)
+        self.profile_store = ProfileStore(self.activity_tracker.store.db)
         info = await self.application_info()
         self.owner_id = info.team.owner_id if info.team else info.owner.id
         self.away = AwayFeature(self)
         await self.tree.sync()
+
+    def has_role_category(self, interaction, *categories):
+        if interaction.guild_id is None or self.profile_store is None:
+            return False
+        roles = getattr(interaction.user, 'roles', ())
+        return self.profile_store.has_role_category(interaction.guild_id, roles, categories)
 
     async def on_voice_state_update(self, member, before, after):
         if self.activity_tracker:
@@ -60,6 +76,7 @@ class DohwaBot(discord.Client):
         if self.activity_tracker:
             self.activity_tracker.close()
             self.activity_tracker = None
+        self.profile_store = None
         await super().close()
 
     async def on_ready(self):

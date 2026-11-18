@@ -46,12 +46,19 @@ class ProfileStore:
                             (guild_id,category,role_id))
             self.db.execute('INSERT INTO profile_roles VALUES (?,?,?)',(guild_id,category,role_id))
 
+    def role_categories(self, guild_id):
+        return dict(self.db.execute('SELECT role_id,category FROM profile_roles WHERE guild_id=?',(guild_id,)))
+
     def category(self, guild_id, member_roles):
-        mapping = dict(self.db.execute('SELECT role_id,category FROM profile_roles WHERE guild_id=?',(guild_id,)))
+        mapping = self.role_categories(guild_id)
         for role in sorted(member_roles,reverse=True):
             if role.id in mapping:
                 return mapping[role.id]
         return '서버원'
+
+    def has_role_category(self, guild_id, member_roles, categories):
+        mapping = self.role_categories(guild_id)
+        return any(mapping.get(role.id) in categories for role in member_roles)
 
     def permit(self, guild_id, user_id):
         row = self.db.execute('SELECT granted FROM external_permits WHERE guild_id=? AND user_id=?',
@@ -124,9 +131,6 @@ def target_for(interaction, selected):
 
 
 def register(bot):
-    def store():
-        return ProfileStore(bot.activity_tracker.store.db)
-
     render_lock = asyncio.Semaphore(2)
 
     @bot.tree.command(name='정보',description='선택한 유저의 정보 카드. 생략하면 내 정보를 표시합니다.')
@@ -139,7 +143,7 @@ def register(bot):
         try:
             member = await interaction.guild.fetch_member(target.id)
             bot.activity_tracker.reconcile()
-            db = store()
+            db = bot.profile_store
             category = db.category(interaction.guild_id,member.roles)
             available, seconds = bot.away.store.available(interaction.guild_id,member.id)
             permit = db.permit(interaction.guild_id,member.id)
@@ -162,29 +166,29 @@ def register(bot):
         else:
             raise error
 
-    @bot.tree.command(name='역할부여',description='소유자 전용: 디스코드 역할을 정보 카드 카테고리에 연결합니다.')
+    @bot.tree.command(name='역할부여',description='서버장·도화 소유자: 디스코드 역할을 카드와 권한에 연결합니다.')
     @app_commands.guild_only()
     @app_commands.choices(카테고리=[app_commands.Choice(name=c,value=c) for c in CATEGORIES])
     async def assign(interaction: discord.Interaction, 카테고리: app_commands.Choice[str], 역할: discord.Role):
         if 역할.is_default():
             await interaction.response.send_message('@everyone은 지정할 수 없습니다.',ephemeral=True)
             return
-        store().assign(interaction.guild_id,카테고리.value,역할.id)
+        bot.profile_store.assign(interaction.guild_id,카테고리.value,역할.id)
         await interaction.response.send_message(f'{역할.mention} → {카테고리.value} 카드로 연결했습니다.',
             ephemeral=True,allowed_mentions=discord.AllowedMentions.none())
 
-    permits = app_commands.Group(name='외활권',description='소유자 전용: 외활권 보유 여부 설정')
+    permits = app_commands.Group(name='외활권',description='서버장·총관리자·도화 소유자: 외활권 보유 여부 설정')
 
     @permits.command(name='부여',description='유저에게 외활권을 부여합니다.')
     @app_commands.guild_only()
     async def grant(interaction: discord.Interaction, 유저: discord.Member):
-        store().set_permit(interaction.guild_id,유저.id,True)
+        bot.profile_store.set_permit(interaction.guild_id,유저.id,True)
         await interaction.response.send_message('외활권을 부여했습니다.',ephemeral=True)
 
     @permits.command(name='회수',description='유저의 외활권을 회수합니다.')
     @app_commands.guild_only()
     async def revoke(interaction: discord.Interaction, 유저: discord.Member):
-        store().set_permit(interaction.guild_id,유저.id,False)
+        bot.profile_store.set_permit(interaction.guild_id,유저.id,False)
         await interaction.response.send_message('외활권을 회수했습니다.',ephemeral=True)
 
     bot.tree.add_command(permits)

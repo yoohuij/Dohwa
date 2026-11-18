@@ -156,12 +156,18 @@ class AwayFeature:
         bot.add_view(RecallView(self))
 
     def manager(self, interaction):
-        return interaction.guild is not None and interaction.user.id == self.bot.owner_id
+        return interaction.guild_id is not None and (
+            interaction.user.id == self.bot.owner_id
+            or self.bot.has_role_category(interaction, '서버장', '총관리자', '단속팀')
+        )
 
     async def authorize(self, interaction):
         if self.manager(interaction):
             return True
-        await interaction.response.send_message('도화 소유자만 처리할 수 있습니다.',ephemeral=True)
+        await interaction.response.send_message(
+            '서버장, 총관리자, 단속팀 또는 도화 소유자만 처리할 수 있습니다.',
+            ephemeral=True,
+        )
         return False
 
     async def dm(self, row, text):
@@ -308,7 +314,7 @@ def register(bot):
     async def request(interaction: discord.Interaction, 외활시간: app_commands.Range[int,1,8760]):
         await bot.away.request(interaction,외활시간)
 
-    @bot.tree.command(name='외활요청방',description='소유자 전용: 외활 요청과 종료 알림을 보낼 방을 지정합니다.')
+    @bot.tree.command(name='외활요청방',description='서버장·도화 소유자: 외활 요청과 종료 알림을 보낼 방을 지정합니다.')
     @app_commands.guild_only()
     async def configure(interaction: discord.Interaction, 채널: discord.TextChannel):
         permissions = 채널.permissions_for(interaction.guild.me)

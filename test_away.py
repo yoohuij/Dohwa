@@ -4,6 +4,8 @@ from types import SimpleNamespace as N
 from unittest.mock import AsyncMock, patch
 
 from away import AwayStore, AwayFeature, request_embed, START_TEXT, END_TEXT
+from bot import DohwaBot, bot as configured_bot
+from profile_card import ProfileStore
 
 
 def run_mocked(coroutine):
@@ -119,12 +121,67 @@ class AwayTests(unittest.TestCase):
         run_mocked(feature.dm({'user_id':2},END_TEXT))
         self.assertEqual(user.send.await_args.args[0],'<@2>\n'+END_TEXT)
 
-    def test_manager_restricts_buttons(self):
-        feature = AwayFeature.__new__(AwayFeature)
-        feature.bot = N(owner_id=5)
-        self.assertTrue(feature.manager(N(guild=N(id=1),user=N(id=5))))
-        self.assertFalse(feature.manager(N(guild=N(id=1),user=N(id=9))))
-        self.assertFalse(feature.manager(N(guild=None,user=N(id=5))))
+class RoleAccessTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        db = sqlite3.connect(':memory:')
+        self.addCleanup(db.close)
+        self.bot = DohwaBot()
+        self.bot.owner_id = 5
+        self.bot.profile_store = ProfileStore(db)
+        for category, role_id in [('서버장', 10), ('총관리자', 20), ('단속팀', 30), ('단속팀장', 40)]:
+            self.bot.profile_store.assign(1, category, role_id)
+        self.away = AwayFeature.__new__(AwayFeature)
+        self.away.bot = self.bot
+
+    async def test_command_access_for_each_registered_command(self):
+        public = {'정보', '외활요청'}
+        permits = {'외활권 부여', '외활권 회수'}
+        for user_id, roles, allowed in [
+            (5, (), None),
+            (6, (40, 10), None),
+            (6, (40, 20), public | permits),
+            (6, (30,), public),
+            (6, (40,), public),
+            (6, (), public),
+        ]:
+            for command in configured_bot.tree.walk_commands():
+                if not hasattr(command, 'callback'):
+                    continue
+                interaction = self.interaction(1, user_id, roles, command)
+                with self.subTest(roles=roles, command=command.qualified_name):
+                    self.assertEqual(
+                        await self.bot.tree.interaction_check(interaction),
+                        allowed is None or command.qualified_name in allowed,
+                    )
+
+    async def test_buttons_use_current_guild_role_mappings(self):
+        for guild, user_id, roles, allowed in [
+            (1, 5, (), True),
+            (1, 6, (10,), True),
+            (1, 6, (20,), True),
+            (1, 6, (40, 30), True),
+            (1, 6, (40,), False),
+            (1, 6, (), False),
+            (2, 6, (10, 20, 30), False),
+            (None, 5, (), False),
+        ]:
+            interaction = self.interaction(guild, user_id, roles)
+            with self.subTest(guild=guild, roles=roles):
+                self.assertEqual(await self.away.authorize(interaction), allowed)
+                if not allowed:
+                    interaction.response.send_message.assert_awaited_once()
+
+        self.bot.profile_store.assign(1, '단속팀', 31)
+        self.assertFalse(self.away.manager(self.interaction(1, 6, (30,))))
+        self.assertTrue(self.away.manager(self.interaction(1, 6, (31,))))
+
+    def interaction(self, guild_id, user_id, roles, command=None):
+        return N(
+            guild_id=guild_id,
+            user=N(id=user_id, roles=[N(id=role_id) for role_id in roles]),
+            command=command,
+            response=N(send_message=AsyncMock()),
+        )
 
 
 if __name__ == '__main__':
