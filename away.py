@@ -304,9 +304,9 @@ class AwayFeature:
 def register(bot):
     @bot.tree.command(name='외활요청',description='활동시간 5시간당 외활 1시간을 요청합니다.')
     @app_commands.guild_only()
-    @app_commands.describe(시간='요청할 외활 시간 (정수 시간)')
-    async def request(interaction: discord.Interaction, 시간: app_commands.Range[int,1,8760]):
-        await bot.away.request(interaction,시간)
+    @app_commands.describe(외활시간='요청할 외활 시간 (정수 시간)')
+    async def request(interaction: discord.Interaction, 외활시간: app_commands.Range[int,1,8760]):
+        await bot.away.request(interaction,외활시간)
 
     @bot.tree.command(name='외활요청방',description='소유자 전용: 외활 요청과 종료 알림을 보낼 방을 지정합니다.')
     @app_commands.guild_only()
