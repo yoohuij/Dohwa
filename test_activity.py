@@ -76,18 +76,6 @@ class ActivityTests(unittest.TestCase):
         self.assertEqual(self.store.total(2,2),0)
 
 
-    def test_adjust_hours_preserves_seconds_and_rejects_overdraw(self):
-        self.store.add(self.key, 123.5)
-        self.assertEqual(self.store.adjust_hours(*self.key, 2), 7323.5)
-        with self.assertRaises(ValueError):
-            self.store.adjust_hours(*self.key, -3)
-        with self.assertRaises(ValueError):
-            self.store.adjust_hours(*self.key, 0)
-        self.assertEqual(self.store.adjust_hours(*self.key, -1), 3723.5)
-        self.assertEqual(self.store.total(2, 2), 0)
-        self.assertEqual(self.store.adjust_hours(1, 3, 1), 3600)
-
-
 class BotSetupTests(unittest.IsolatedAsyncioTestCase):
     async def test_setup_uses_tracker_without_changing_discord_presence(self):
         with tempfile.TemporaryDirectory() as directory:

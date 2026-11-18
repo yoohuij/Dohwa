@@ -8,6 +8,7 @@ from pathlib import Path
 import discord
 from discord import app_commands
 from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageChops
+from activity import format_activity_time
 
 ASSETS = Path(__file__).resolve().parent / 'assets'
 SIZE = (1500, 900)
@@ -102,7 +103,7 @@ def draw_fit(draw, text, box, size, color, align='left'):
     draw.text((x,(top+bottom)/2),text,font=chosen,fill=color,anchor='lm')
 
 
-def render_card(avatar, nickname, server_name, category, seconds, available_hours, permit):
+def render_card(avatar, nickname, server_name, category, seconds, available_hours, permit, *, usable_seconds):
     canvas = background(category).copy()
     dark = category not in ('서버원','활동팀','뉴관팀')
     ink = '#f3f6ff' if dark else '#10264c'
@@ -113,7 +114,9 @@ def render_card(avatar, nickname, server_name, category, seconds, available_hour
     draw.rectangle((54,124,705,775),outline='#ecf4ff',width=2)
     draw_fit(draw,nickname,(760,135,1390,200),44,ink,'center')
     draw.line((760,230,1390,230),fill=ink,width=2)
-    draw_fit(draw,f'활동시간 : {max(0,int(seconds//3600))}시간',(780,300,1390,365),36,ink)
+    total = format_activity_time(seconds)
+    usable = format_activity_time(usable_seconds)
+    draw_fit(draw,f'활동시간 : {total} | 사용 가능 {usable}',(780,300,1390,365),36,ink)
     draw_fit(draw,f'외활 가능 시간 : {max(0,int(available_hours))}시간',(780,420,1390,485),36,ink)
     draw_fit(draw,f'직책 : {category}',(780,535,1390,600),36,ink)
     draw_fit(draw,'외활권 :',(780,650,925,715),36,ink)
@@ -145,12 +148,13 @@ def register(bot):
             bot.activity_tracker.reconcile()
             db = bot.profile_store
             category = db.category(interaction.guild_id,member.roles)
-            available, seconds = bot.away.store.available(interaction.guild_id,member.id)
+            balance = bot.away.store.balance(interaction.guild_id,member.id)
             permit = db.permit(interaction.guild_id,member.id)
             avatar = await member.display_avatar.with_static_format('png').with_size(1024).read()
             async with render_lock:
                 card = await asyncio.to_thread(render_card,avatar,member.display_name,
-                    interaction.guild.name,category,seconds,available,permit)
+                    interaction.guild.name,category,balance.activity_seconds,balance.available_hours,permit,
+                    usable_seconds=balance.usable_seconds)
             await interaction.followup.send(file=discord.File(io.BytesIO(card),filename=f'profile-{member.id}.png'),
                 allowed_mentions=discord.AllowedMentions.none())
         except discord.NotFound:

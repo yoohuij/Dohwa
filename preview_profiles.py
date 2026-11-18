@@ -17,7 +17,8 @@ def main():
     sheet = Image.new('RGB',(1500,1320),'#e6edf2')
     d = ImageDraw.Draw(sheet)
     for index,category in enumerate(COLORS):
-        card = render_card(data.getvalue(),'도화','도화의 쉼터',category,15*3600,3,index%2==0)
+        card = render_card(data.getvalue(),'도화','도화의 쉼터',category,15*3600,2,index%2==0,
+                           usable_seconds=10*3600+30*60)
         (out / f'card_{index+1:02}.png').write_bytes(card)
         with Image.open(io.BytesIO(card)) as image:
             thumbnail = image.resize((480,288),Image.Resampling.LANCZOS)

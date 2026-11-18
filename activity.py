@@ -12,6 +12,11 @@ IDLE_LIMIT = 1800
 LOG = logging.getLogger(__name__)
 
 
+def format_activity_time(seconds):
+    hours, minutes = divmod(max(0, int(seconds)) // 60, 60)
+    return f'{hours}시간 {minutes}분'
+
+
 @dataclass
 class Session:
     stamp: float
@@ -43,22 +48,6 @@ class ActivityStore:
         row = self.db.execute('SELECT active_seconds FROM activity_totals WHERE guild_id=? AND user_id=?',
                               (guild_id, user_id)).fetchone()
         return row[0] if row else 0
-
-    def adjust_hours(self, guild_id, user_id, hours):
-        if not hours:
-            raise ValueError('0시간은 조정할 수 없습니다.')
-        with self.db:
-            self.db.execute('BEGIN IMMEDIATE')
-            total = self.total(guild_id, user_id) + hours * 3600.0
-            if total < 0:
-                raise ValueError('현재 활동시간을 초과하여 감소시킬 수 없습니다.')
-            self.db.execute(
-                '''INSERT INTO activity_totals (guild_id, user_id, active_seconds) VALUES (?, ?, ?)
-                   ON CONFLICT(guild_id,user_id) DO UPDATE SET active_seconds=excluded.active_seconds''',
-                (guild_id, user_id, total),
-            )
-        return total
-
 
 class ActivityClock:
     def __init__(self, store):

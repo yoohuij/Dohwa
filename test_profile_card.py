@@ -53,12 +53,12 @@ class ProfileTests(unittest.TestCase):
         Image.new('RGB',(100,200),'#ff00ff').save(avatar,'PNG')
         for category in COLORS:
             card = render_card(avatar.getvalue(),'아주 긴 이름'*12,'서버 이름'*12,
-                               category,0,0,False)
+                               category,0,0,False,usable_seconds=0)
             with Image.open(io.BytesIO(card)) as image:
                 self.assertEqual(image.size,(1500,900))
                 self.assertEqual(image.getpixel((100,200)),(255,0,255))
                 self.assertEqual(image.getpixel((1000,680)),(217,55,66))
-        card = render_card(avatar.getvalue(),'유저','서버','서버장',54000,3,True)
+        card = render_card(avatar.getvalue(),'유저','서버','서버장',55800,2,True,usable_seconds=37800)
         with Image.open(io.BytesIO(card)) as image:
             self.assertEqual(image.getpixel((1000,680)),(7,155,53))
 

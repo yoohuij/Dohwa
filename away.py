@@ -2,14 +2,36 @@
 import asyncio
 import logging
 import time
+from dataclasses import dataclass
 
 import discord
 from discord import app_commands
 from discord.ext import tasks
+from activity import format_activity_time
 
 LOG = logging.getLogger(__name__)
 END_TEXT = '외활이 끝났습니다! 다시 서버로 돌아오세요!'
 START_TEXT = '외활이 허락되었습니다! 지금부터 시간이 지나갑니다.'
+SECONDS_PER_AWAY_HOUR = 5 * 3600
+
+
+@dataclass(frozen=True)
+class TimeBalance:
+    activity_seconds: float
+    usable_seconds: float
+    away_credits: int
+
+    @property
+    def away_hours(self):
+        return int(self.usable_seconds // SECONDS_PER_AWAY_HOUR) + self.away_credits
+
+    @property
+    def available_hours(self):
+        return max(0, self.away_hours)
+
+    @property
+    def available_seconds(self):
+        return max(0, self.usable_seconds / 5 + self.away_credits * 3600)
 
 
 class AwayStore:
@@ -22,6 +44,9 @@ class AwayStore:
                 CREATE TABLE IF NOT EXISTS away_hour_adjustments (
                     guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, hours INTEGER NOT NULL,
                     PRIMARY KEY(guild_id,user_id));
+                CREATE TABLE IF NOT EXISTS usable_activity_adjustments (
+                    guild_id INTEGER NOT NULL, user_id INTEGER NOT NULL, seconds REAL NOT NULL,
+                    PRIMARY KEY(guild_id,user_id));
                 CREATE TABLE IF NOT EXISTS away_requests (
                     id INTEGER PRIMARY KEY, guild_id INTEGER NOT NULL,
                     user_id INTEGER NOT NULL, hours INTEGER NOT NULL CHECK(hours>0),
@@ -30,9 +55,35 @@ class AwayStore:
                     reviewer_id INTEGER, started REAL, ends REAL,
                     start_dm TEXT NOT NULL DEFAULT 'pending',
                     end_dm TEXT NOT NULL DEFAULT 'pending', end_message INTEGER,
-                    dirty INTEGER NOT NULL DEFAULT 1, last_call REAL NOT NULL DEFAULT 0);
+                    dirty INTEGER NOT NULL DEFAULT 1, last_call REAL NOT NULL DEFAULT 0,
+                    credit_hours_used INTEGER NOT NULL DEFAULT 0);
                 CREATE UNIQUE INDEX IF NOT EXISTS away_one_open ON away_requests(guild_id,user_id)
                     WHERE status IN ('pending','active');
+            ''')
+        self._migrate_credit_usage()
+
+    def _migrate_credit_usage(self):
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            columns = {row[1] for row in self.db.execute('PRAGMA table_info(away_requests)')}
+            if 'credit_hours_used' in columns:
+                return
+            self.db.execute(
+                'ALTER TABLE away_requests ADD COLUMN credit_hours_used INTEGER NOT NULL DEFAULT 0'
+            )
+            # Old approvals did not record which pool they used. Allocate existing extra
+            # credits to the oldest approvals first without changing the total away balance.
+            self.db.execute('''
+                WITH past_usage AS (
+                    SELECT r.id, MIN(r.hours, MAX(0, COALESCE(a.hours, 0) + r.hours -
+                        SUM(r.hours) OVER (PARTITION BY r.guild_id, r.user_id ORDER BY r.id))) AS credits
+                    FROM away_requests AS r
+                    LEFT JOIN away_hour_adjustments AS a USING (guild_id, user_id)
+                    WHERE r.status IN ('active', 'ended')
+                )
+                UPDATE away_requests
+                SET credit_hours_used = (SELECT credits FROM past_usage WHERE past_usage.id=away_requests.id)
+                WHERE status IN ('active', 'ended')
             ''')
 
     def rows(self, sql, args=()):
@@ -61,37 +112,63 @@ class AwayStore:
             self.db.execute('INSERT OR REPLACE INTO away_settings VALUES (?,?)',(guild_id,channel_id))
 
     def available(self, guild_id, user_id):
-        balance, seconds = self._balance(guild_id, user_id)
-        return max(0, balance), seconds
+        balance = self.balance(guild_id, user_id)
+        return balance.available_hours, balance.activity_seconds
 
-    def _balance(self, guild_id, user_id):
+    def balance(self, guild_id, user_id):
+        key = guild_id, user_id
         row = self.db.execute('SELECT active_seconds FROM activity_totals WHERE guild_id=? AND user_id=?',
-                              (guild_id,user_id)).fetchone()
+                              key).fetchone()
         seconds = row[0] if row else 0
-        used = self.db.execute("SELECT COALESCE(SUM(hours),0) FROM away_requests WHERE guild_id=? AND user_id=? AND status IN ('active','ended')",
-                               (guild_id,user_id)).fetchone()[0]
-        adjustment = self.db.execute(
-            'SELECT hours FROM away_hour_adjustments WHERE guild_id=? AND user_id=?',
-            (guild_id, user_id),
+        activity_used, credits_used = self.db.execute(
+            """SELECT COALESCE(SUM(hours-credit_hours_used),0), COALESCE(SUM(credit_hours_used),0)
+               FROM away_requests WHERE guild_id=? AND user_id=? AND status IN ('active','ended')""",
+            key,
         ).fetchone()
-        return int(seconds // 18000) - used + (adjustment[0] if adjustment else 0), seconds
+        credits = self.db.execute(
+            'SELECT hours FROM away_hour_adjustments WHERE guild_id=? AND user_id=?',
+            key,
+        ).fetchone()
+        activity_adjustment = self.db.execute(
+            'SELECT seconds FROM usable_activity_adjustments WHERE guild_id=? AND user_id=?',
+            key,
+        ).fetchone()
+        usable = seconds - activity_used * SECONDS_PER_AWAY_HOUR
+        return TimeBalance(seconds, usable + (activity_adjustment[0] if activity_adjustment else 0),
+                           (credits[0] if credits else 0) - credits_used)
 
     def adjust_hours(self, guild_id, user_id, hours):
         if not hours:
             raise ValueError('0시간은 조정할 수 없습니다.')
         with self.db:
             self.db.execute('BEGIN IMMEDIATE')
-            balance, _ = self._balance(guild_id, user_id)
-            available = max(0, balance) + hours
+            balance = self.balance(guild_id, user_id)
+            available = balance.available_hours + hours
             if available < 0:
                 raise ValueError('현재 외활 가능 시간을 초과하여 감소시킬 수 없습니다.')
             # Apply the requested change to the visible balance, even after an activity correction.
             self.db.execute(
                 '''INSERT INTO away_hour_adjustments (guild_id, user_id, hours) VALUES (?, ?, ?)
                    ON CONFLICT(guild_id,user_id) DO UPDATE SET hours=hours+excluded.hours''',
-                (guild_id, user_id, available - balance),
+                (guild_id, user_id, available - balance.away_hours),
             )
         return available
+
+    def adjust_activity_hours(self, guild_id, user_id, hours):
+        if not hours:
+            raise ValueError('0시간은 조정할 수 없습니다.')
+        with self.db:
+            self.db.execute('BEGIN IMMEDIATE')
+            balance = self.balance(guild_id, user_id)
+            usable = max(0, balance.usable_seconds) + hours * 3600.0
+            if usable < 0:
+                raise ValueError('사용 가능 활동시간을 초과하여 감소시킬 수 없습니다.')
+            self.db.execute(
+                '''INSERT INTO usable_activity_adjustments (guild_id, user_id, seconds) VALUES (?, ?, ?)
+                   ON CONFLICT(guild_id,user_id) DO UPDATE SET seconds=seconds+excluded.seconds''',
+                (guild_id, user_id, usable - balance.usable_seconds),
+            )
+            return self.balance(guild_id, user_id)
 
     def request(self, request_id, guild_id, user_id, hours):
         if not isinstance(hours,int) or not 1 <= hours <= 8760:
@@ -120,11 +197,15 @@ class AwayStore:
             row = self.get(request_id)
             if row is None or row['status'] != 'pending':
                 raise ValueError('이미 처리되었거나 없는 요청입니다.')
-            if approve and row['hours'] > self.available(row['guild_id'],row['user_id'])[0]:
-                raise ValueError('현재 외활 가능 시간이 부족합니다. 거절 처리해 주세요.')
-            self.db.execute('UPDATE away_requests SET status=?,reviewer_id=?,started=?,ends=?,dirty=1 WHERE id=?',
+            credits = 0
+            if approve:
+                balance = self.balance(row['guild_id'], row['user_id'])
+                if row['hours'] > balance.available_hours:
+                    raise ValueError('현재 외활 가능 시간이 부족합니다. 거절 처리해 주세요.')
+                credits = min(row['hours'], max(0, balance.away_credits))
+            self.db.execute('UPDATE away_requests SET status=?,reviewer_id=?,started=?,ends=?,credit_hours_used=?,dirty=1 WHERE id=?',
                             ('active' if approve else 'rejected',reviewer_id,
-                             now if approve else None,now+row['hours']*3600 if approve else None,request_id))
+                             now if approve else None,now+row['hours']*3600 if approve else None,credits,request_id))
         return self.get(request_id)
 
     def expire(self, now):
@@ -341,6 +422,22 @@ def register(bot):
     @app_commands.describe(외활시간='요청할 외활 시간 (정수 시간)')
     async def request(interaction: discord.Interaction, 외활시간: app_commands.Range[int,1,8760]):
         await bot.away.request(interaction,외활시간)
+
+    @bot.tree.command(name='외활시간측정', description='유저의 외활 신청 가능 여부와 시간을 확인합니다.')
+    @app_commands.guild_only()
+    @app_commands.describe(유저='외활 가능 시간을 확인할 서버원')
+    async def measure(interaction: discord.Interaction, 유저: discord.Member):
+        bot.activity_tracker.reconcile()
+        balance = bot.away.store.balance(interaction.guild_id, 유저.id)
+        eligible = balance.available_hours > 0
+        embed = discord.Embed(
+            title='외활 가능' if eligible else '외활 불가',
+            colour=0x2ECC71 if eligible else 0xE74C3C,
+        )
+        embed.add_field(name='유저', value=유저.mention, inline=False)
+        duration = format_activity_time(balance.available_seconds) if eligible else '0시간'
+        embed.add_field(name='외활 가능 시간', value=duration, inline=False)
+        await interaction.response.send_message(embed=embed, allowed_mentions=discord.AllowedMentions.none())
 
     @bot.tree.command(name='외활요청방',description='서버장·도화 소유자: 외활 요청과 종료 알림을 보낼 방을 지정합니다.')
     @app_commands.guild_only()

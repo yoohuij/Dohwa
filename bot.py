@@ -6,7 +6,7 @@ from pathlib import Path
 import discord
 from discord import app_commands
 from dotenv import load_dotenv
-from activity import ActivityTracker
+from activity import ActivityTracker, format_activity_time
 from away import AwayFeature, register as register_away
 from profile_card import ProfileStore, register as register_profile
 
@@ -15,7 +15,7 @@ class DohwaCommandTree(app_commands.CommandTree):
     async def interaction_check(self, interaction):
         bot = self.client
         command = interaction.command.qualified_name if interaction.command else None
-        if command in ('외활요청', '정보') and interaction.guild_id is not None:
+        if command in ('외활요청', '외활시간측정', '정보') and interaction.guild_id is not None:
             return True
         if interaction.user.id == bot.owner_id or bot.has_role_category(interaction, '서버장'):
             return True
@@ -114,21 +114,20 @@ async def adjust_away_time(interaction: discord.Interaction, 유저: discord.Mem
     )
 
 
-@bot.tree.command(name="활동시간추가감소", description="서버장·도화 소유자: 유저의 활동시간을 조정합니다.")
+@bot.tree.command(name="활동시간추가감소", description="서버장·도화 소유자: 유저가 사용 가능한 활동시간을 조정합니다.")
 @app_commands.guild_only()
 @app_commands.describe(시간="양수는 추가, 음수는 감소. 단위는 시간입니다.")
 async def adjust_activity_time(interaction: discord.Interaction, 유저: discord.Member, 시간: int):
     await interaction.response.defer(ephemeral=True)
     bot.activity_tracker.reconcile()
     try:
-        seconds = bot.activity_tracker.store.adjust_hours(interaction.guild_id, 유저.id, 시간)
+        balance = bot.away.store.adjust_activity_hours(interaction.guild_id, 유저.id, 시간)
     except ValueError as error:
         await interaction.followup.send(str(error), ephemeral=True)
         return
-    hours, minutes = divmod(int(seconds) // 60, 60)
-    available, _ = bot.away.store.available(interaction.guild_id, 유저.id)
+    usable = format_activity_time(balance.usable_seconds)
     await interaction.followup.send(
-        f"{유저.mention} 활동시간 {시간:+d}시간. 현재 {hours}시간 {minutes}분, 외활 가능 {available}시간.",
+        f"{유저.mention} 사용 가능 활동시간 {시간:+d}시간. 현재 {usable}, 외활 가능 {balance.available_hours}시간.",
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
